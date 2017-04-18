@@ -1,0 +1,13 @@
+
+setwd("~/Documents/Research")
+
+#install.packages('RJSONIO')
+library(RJSONIO)
+json_file <- fromJSON("train.json")
+
+json_file <- lapply(json_file, function(x) {
+  x[sapply(x, is.null)] <- NA
+  unlist(x)
+})
+
+puppybarn <- as.data.frame(do.call("cbind", json_file))
