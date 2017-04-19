@@ -1,0 +1,33 @@
+suppressMessages(library("jsonlite"))
+suppressMessages(library("dplyr"))
+install.packages("plotly")
+suppressMessages(library("plotly"))
+suppressMessages(library("purrr"))
+suppressMessages(library("RecordLinkage"))
+
+lst.trainData <- fromJSON("train.json")
+
+vec.variables <- setdiff(names(lst.trainData), c("photos", "features"))
+
+df.train <-map_at(lst.trainData, vec.variables, unlist) %>% tibble::as_tibble(.)
+
+vec.addressSimilarity <- levenshteinSim(tolower(df.train$street_address),tolower(df.train$display_address))
+
+
+df.train$similaritySamples <- vec.addressSimilarity
+head(df.train$similaritySamples)
+install.packages("foreign")
+require(foreign)
+ require(ggplot2)
+ require(MASS)
+ require(Hmisc)
+ require(reshape2)
+colnames(df.train)
+model<-polr(interest_level ~ bathrooms + bedrooms + created + longitude + latitude 
+            + price + similaritySamples, 
+            data =df.train, Hess = TRUE )
+
+
+head(df.similaritySamples,20)
+df.train2 <- as.data.frame(df.train)
+write.csv(df.train2, file = "hoppertrainreal.csv")
