@@ -1,0 +1,93 @@
+suppressMessages(library("jsonlite"))
+install.packages("dplyr")
+suppressMessages(library("dplyr"))
+install.packages("plotly")
+suppressMessages(library("plotly"))
+suppressMessages(library("purrr"))
+install.packages("RecordLinkage")
+suppressMessages(library("RecordLinkage"))
+library(RecordLinkage)
+setwd("~/Documents/Research")
+
+#load data
+lst.trainData <- fromJSON("train.json")
+vec.variables <- setdiff(names(lst.trainData), c("photos", "features"))
+df.train <-map_at(lst.trainData, vec.variables, unlist) %>% tibble::as_tibble(.)
+#add similarity scores
+vec.addressSimilarity <- levenshteinSim(tolower(df.train$street_address),tolower(df.train$display_address))
+df.train$similaritySamples <- vec.addressSimilarity
+
+head(df.train$similaritySamples)
+
+#more packages i guess
+install.packages("foreign")
+require(foreign)
+require(ggplot2)
+require(MASS)
+install.packages("Hmisc")
+require(Hmisc)
+require(reshape2)
+install.packages("MASS")
+library("MASS")
+
+#make training data to csv to upload to domo
+my.df <- data.frame(lapply(df.train, as.character), stringsAsFactors=FALSE)
+write.csv(my.df, file = "hoppertrainreal.csv")
+
+#make interest level a factor
+df.train$interest_level3 <- as.factor(df.train$interest_level)
+#fix nul similarity scores with median score
+df.train$similaritySamples[is.na(df.train$similaritySamples) == TRUE]<-.7857
+
+#make a model
+model<-polr(interest_level3 ~  bathrooms + bedrooms + latitude + longitude + similaritySamples, 
+            data =df.train, Hess = TRUE )
+summary(model)
+
+
+
+#make a prediction
+prediction <- predict(model, data = df.train,type = "class")
+head(prediction)
+
+#check prediction against real
+df.train_compare <- my.df
+df.train_compare$prediction <- prediction
+table(df.train_compare$prediction)
+df.train_compare$correct_prediction[df.train_compare$prediction == df.train_compare$interest_level] <- "correct"
+df.train_compare$correct_prediction[df.train_compare$prediction != df.train_compare$interest_level] <- "incorrect"
+table(df.train_compare$correct_prediction)
+
+#load test
+lst.testData <- fromJSON("test.json")
+vec.variables_test <- setdiff(names(lst.testData), c("photos", "features"))
+df.test <-map_at(lst.testData, vec.variables_test, unlist) %>% tibble::as_tibble(.)
+my.test_df <- data.frame(df.test)
+
+#add similarity scores
+vec.addressSimilarity_test <- levenshteinSim(tolower(my.test_df$street_address),tolower(my.test_df$display_address))
+my.test_df$similaritySamples <- vec.addressSimilarity_test
+head(my.test_df$similaritySamples)
+
+
+#make predictions
+prediction_test <- predict(model, my.test_df,type = "probs")
+prediction_test <- data.frame(prediction_test)
+
+#nix NA's in prediction
+prediction_test$high[is.na(prediction_test$high==TRUE)] <- .07831
+prediction_test$low[is.na(prediction_test$low==TRUE)] <- .6982
+prediction_test$medium[is.na(prediction_test$medium==TRUE)] <- .2235
+
+#prepare submission
+submit <- cbind(my.test_df$listing_id,prediction_test)
+submit <- submit[c(1,2,4,3)]
+names(submit)[names(submit) == 'my.test_df$listing_id'] <- 'listing_id'
+
+#upload preditions
+write.csv(submit, file = "submission.csv",row.names=FALSE)
+
+
+head(prediction_test)
+summary(prediction_test)
+str(prediction_test)
