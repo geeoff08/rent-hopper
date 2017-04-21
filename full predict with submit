@@ -19,6 +19,20 @@ df.train$similaritySamples <- vec.addressSimilarity
 
 head(df.train$similaritySamples)
 
+#creating a new column that counts how many photos each listing has
+photos_count <- map(df.train[['photos']], function(x) length(unlist(x)))
+photos_count <- do.call('rbind', photos_count)
+df.train$photos_count <- photos_count[,1]
+
+#doing the same with features
+features_count <- map(df.train[['features']], function(x) length(unlist(x)))
+features_count <- do.call('rbind', features_count)
+df.train$features_count <- features_count[,1]
+
+#having a total room count might come in handy
+df.train <- mutate(df.train, total_rooms = bedrooms + bathrooms)
+
+
 #more packages i guess
 install.packages("foreign")
 require(foreign)
@@ -40,7 +54,8 @@ df.train$interest_level3 <- as.factor(df.train$interest_level)
 df.train$similaritySamples[is.na(df.train$similaritySamples) == TRUE]<-.7857
 
 #make a model
-model<-polr(interest_level3 ~  bathrooms + bedrooms + latitude + longitude + similaritySamples, 
+model<-polr(interest_level3 ~  bathrooms + bedrooms +  photos_count 
+            + features_count + latitude + longitude + similaritySamples, 
             data =df.train, Hess = TRUE )
 summary(model)
 
@@ -69,6 +84,19 @@ vec.addressSimilarity_test <- levenshteinSim(tolower(my.test_df$street_address),
 my.test_df$similaritySamples <- vec.addressSimilarity_test
 head(my.test_df$similaritySamples)
 
+#creating a new column that counts how many photos each listing has
+photos_count <- map(my.test_df[['photos']], function(x) length(unlist(x)))
+photos_count <- do.call('rbind', photos_count)
+my.test_df$photos_count <- photos_count[,1]
+
+#doing the same with features
+features_count <- map(my.test_df[['features']], function(x) length(unlist(x)))
+features_count <- do.call('rbind', features_count)
+my.test_df$features_count <- features_count[,1]
+
+#having a total room count might come in handy
+my.test_df <- mutate(my.test_df, total_rooms = bedrooms + bathrooms)
+
 
 #make predictions
 prediction_test <- predict(model, my.test_df,type = "probs")
@@ -85,7 +113,7 @@ submit <- submit[c(1,2,4,3)]
 names(submit)[names(submit) == 'my.test_df$listing_id'] <- 'listing_id'
 
 #upload preditions
-write.csv(submit, file = "submission.csv",row.names=FALSE)
+write.csv(submit, file = "submission2.csv",row.names=FALSE)
 
 
 head(prediction_test)
