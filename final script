@@ -1,0 +1,224 @@
+suppressMessages(library("jsonlite"))
+install.packages("dplyr")
+suppressMessages(library("dplyr"))
+install.packages("plotly")
+suppressMessages(library("plotly"))
+suppressMessages(library("purrr"))
+install.packages("RecordLinkage")
+suppressMessages(library("RecordLinkage"))
+library(RecordLinkage)
+setwd("~/Documents/Kaggle Competition/RentHop")
+#setwd("~/Documents/Research")
+
+#load data
+lst.trainData <- fromJSON("train.json")
+vec.variables <- setdiff(names(lst.trainData), c("photos", "features"))
+df.train <-map_at(lst.trainData, vec.variables, unlist) %>% tibble::as_tibble(.)
+#add similarity scores
+vec.addressSimilarity <- levenshteinSim(tolower(df.train$street_address),tolower(df.train$display_address))
+df.train$similaritySamples <- vec.addressSimilarity
+
+head(df.train$similaritySamples)
+
+#creating a new column that counts how many photos each listing has
+photos_count <- map(df.train[['photos']], function(x) length(unlist(x)))
+photos_count <- do.call('rbind', photos_count)
+df.train$photos_count <- photos_count[,1]
+
+#doing the same with features
+features_count <- map(df.train[['features']], function(x) length(unlist(x)))
+features_count <- do.call('rbind', features_count)
+df.train$features_count <- features_count[,1]
+
+#having a total room count might come in handy
+df.train <- mutate(df.train, total_rooms = bedrooms + bathrooms)
+
+#Cluster Analysis
+location_data <- select(df.train, longitude, latitude)
+
+#kmeans finding the number of clusters to use
+set.seed(42)
+withins <- seq(0, 30)
+for (i in 1:30) {
+  withins[i] = kmeans(location_data, centers = i, nstart = 5)$tot.withinss
+}
+
+plot(x = 1:(length(withins)), y = withins, type = "b", xlim = c(3, 35), xlab= "centers", ylim = c(0, 500))
+kmeans_model <- kmeans(location_data, centers = 18, nstart = 5)
+kmeans_model$tot.withinss  
+df.train$cluster <- kmeans_model$cluster
+
+#vizualize stuff
+prob_chart <- group_by(df.train, interest_level, cluster) %>% 
+  summarize(count = n()) %>% 
+  mutate(total = sum(count), p = count/total)
+ggplot(prob_chart, aes(x = cluster, y = p)) + 
+  geom_bar(aes(fill = interest_level), position = "fill", stat = "identity") +
+  #facet_grid(~interest_level_factor)
+  list()
+
+#try more features
+#convert date
+install.packages("lubridate")
+library(lubridate)
+df.train$created<-ymd_hms(df.train$created)
+df.train$month<- month(df.train$created)
+df.train$day<- day(df.train$created)
+df.train$hour<- hour(df.train$created)
+df.train$created = NULL
+
+#price to bedroom ratio
+df.train$bed_price <- df.train$price/df.train$bedrooms
+df.train[which(is.infinite(df.train$bed_price)),]$bed_price = df.train[which(is.infinite(df.train$bed_price)),]$price
+
+#add sum of rooms and price per room
+df.train$room_sum <- df.train$bedrooms + df.train$bathrooms
+df.train$room_diff <- df.train$bedrooms - df.train$bathrooms
+df.train$room_price <- df.train$price/df.train$room_sum
+df.train$bed_ratio <- df.train$bedrooms/df.train$room_sum
+df.train[which(is.infinite(df.train$room_price)),]$room_price = df.train[which(is.infinite(df.train$room_price)),]$price
+
+
+#log transform features, these features aren't normally distributed
+df.train$photo_count_2 <- log(df.train$photos_count + 1)
+df.train$feature_count_2 <- log(df.train$features_count + 1)
+df.train$price_2 <- log(df.train$price + 1)
+df.train$room_price <- log(df.train$room_price + 1)
+df.train$bed_price <- log(df.train$bed_price + 1)
+
+
+
+
+#more packages i guess
+install.packages("foreign")
+require(foreign)
+require(ggplot2)
+require(MASS)
+install.packages("Hmisc")
+require(Hmisc)
+require(reshape2)
+install.packages("MASS")
+library("MASS")
+
+#make training data to csv to upload to domo
+my.df <- data.frame(lapply(df.train, as.character), stringsAsFactors=FALSE)
+write.csv(my.df, file = "hoppertrainreal.csv")
+
+#make interest level a factor
+df.train$interest_level3 <- as.factor(df.train$interest_level)
+#fix nul similarity scores with median score
+df.train$similaritySamples[is.na(df.train$similaritySamples) == TRUE]<-.7857
+
+#make a model
+model<-polr(interest_level3 ~  bathrooms + bedrooms +  photos_count 
+            + features_count + latitude + longitude + similaritySamples + cluster
+            + month + day + hour + bed_price + room_price 
+            + bed_ratio + photo_count_2 + feature_count_2 + price_2 , 
+            data =df.train, Hess = TRUE )
+summary(model)
+
+
+
+#make a prediction
+prediction <- predict(model, data = df.train,type = "class")
+head(prediction)
+
+#check prediction against real
+df.train_compare <- my.df
+df.train_compare$prediction <- prediction
+table(df.train_compare$prediction)
+df.train_compare$correct_prediction[df.train_compare$prediction == df.train_compare$interest_level] <- "correct"
+df.train_compare$correct_prediction[df.train_compare$prediction != df.train_compare$interest_level] <- "incorrect"
+table(df.train_compare$correct_prediction)
+
+#load test
+lst.testData <- fromJSON("test.json")
+vec.variables_test <- setdiff(names(lst.testData), c("photos", "features"))
+df.test <-map_at(lst.testData, vec.variables_test, unlist) %>% tibble::as_tibble(.)
+my.test_df <- data.frame(df.test)
+
+#add similarity scores
+vec.addressSimilarity_test <- levenshteinSim(tolower(my.test_df$street_address),tolower(my.test_df$display_address))
+my.test_df$similaritySamples <- vec.addressSimilarity_test
+head(my.test_df$similaritySamples)
+
+#creating a new column that counts how many photos each listing has
+photos_count <- map(my.test_df[['photos']], function(x) length(unlist(x)))
+photos_count <- do.call('rbind', photos_count)
+my.test_df$photos_count <- photos_count[,1]
+
+#doing the same with features
+features_count <- map(my.test_df[['features']], function(x) length(unlist(x)))
+features_count <- do.call('rbind', features_count)
+my.test_df$features_count <- features_count[,1]
+
+#having a total room count might come in handy
+my.test_df <- mutate(my.test_df, total_rooms = bedrooms + bathrooms)
+
+#cluster time!
+#Cluster Analysis
+location_data_test <- select(my.test_df, longitude, latitude)
+
+#kmeans finding the number of clusters to use
+set.seed(42)
+withins_test <- seq(0, 30)
+for (i in 1:30) {
+  withins_test[i] = kmeans(location_data_test, centers = i, nstart = 5)$tot.withinss
+}
+
+plot(x = 1:(length(withins_test)), y = withins_test, type = "b", xlim = c(3, 35), xlab= "centers", ylim = c(0, 500))
+kmeans_model_test <- kmeans(location_data_test, centers = 18, nstart = 5)
+kmeans_model_test$tot.withinss  
+my.test_df$cluster <- kmeans_model_test$cluster
+
+#convert date
+install.packages("lubridate")
+library(lubridate)
+my.test_df$created<-ymd_hms(my.test_df$created)
+my.test_df$month<- month(my.test_df$created)
+my.test_df$day<- day(my.test_df$created)
+my.test_df$hour<- hour(my.test_df$created)
+my.test_df$created = NULL
+
+#price to bedroom ratio
+my.test_df$bed_price <- my.test_df$price/my.test_df$bedrooms
+my.test_df[which(is.infinite(my.test_df$bed_price)),]$bed_price = my.test_df[which(is.infinite(my.test_df$bed_price)),]$price
+
+#add sum of rooms and price per room
+my.test_df$room_sum <- my.test_df$bedrooms + my.test_df$bathrooms
+my.test_df$room_diff <- my.test_df$bedrooms - my.test_df$bathrooms
+my.test_df$room_price <- my.test_df$price/my.test_df$room_sum
+my.test_df$bed_ratio <- my.test_df$bedrooms/my.test_df$room_sum
+my.test_df[which(is.infinite(my.test_df$room_price)),]$room_price = my.test_df[which(is.infinite(my.test_df$room_price)),]$price
+
+
+#log transform features, these features aren't normally distributed
+my.test_df$photo_count_2 <- log(my.test_df$photos_count + 1)
+my.test_df$feature_count_2 <- log(my.test_df$features_count + 1)
+my.test_df$price_2 <- log(my.test_df$price + 1)
+my.test_df$room_price <- log(my.test_df$room_price + 1)
+my.test_df$bed_price <- log(my.test_df$bed_price + 1)
+
+
+#make predictions
+prediction_test <- predict(model, my.test_df,type = "probs")
+prediction_test <- data.frame(prediction_test)
+
+#nix NA's in prediction
+#summary(prediction_test$high)
+prediction_test$high[is.na(prediction_test$high==TRUE)] <- .07286
+prediction_test$low[is.na(prediction_test$low==TRUE)] <- .6961
+prediction_test$medium[is.na(prediction_test$medium==TRUE)] <- .2310
+
+#prepare submission
+submit <- cbind(my.test_df$listing_id,prediction_test)
+submit <- submit[c(1,2,4,3)]
+names(submit)[names(submit) == 'my.test_df$listing_id'] <- 'listing_id'
+
+#upload preditions
+write.csv(submit, file = "submission4.csv",row.names=FALSE)
+
+
+head(prediction_test)
+summary(prediction_test)
+str(prediction_test)
